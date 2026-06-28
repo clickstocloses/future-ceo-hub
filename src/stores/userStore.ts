@@ -102,7 +102,8 @@ interface UserStore {
   fetchProfile: (userId: string) => Promise<void>;
   addXPForLesson: (lessonId: string) => Promise<void>;
   addXPForQuiz: (quizId: string, scorePercent: number) => Promise<void>;
-  addXP: (amount: number, reason: string) => Promise<void>;
+  addXPForCEOHelper: () => Promise<void>;
+  addXPForCommunityMessage: (messageId: string) => Promise<void>;
   initialize: () => Promise<() => void>;
 }
 
@@ -173,35 +174,31 @@ export const useUserStore = create<UserStore>((set, get) => ({
     await get().fetchProfile(user.id);
   },
 
-  addXP: async (amount: number, reason: string) => {
+  addXPForCEOHelper: async () => {
     const { user } = get();
     if (!user) return;
 
-    // Fallback generic XP - should be avoided in favor of specific RPCs
-    // Only allows reasonable amounts (max 1000 per call) to prevent abuse
-    const validatedAmount = Math.min(Math.abs(amount), 1000);
+    const { data, error } = await supabase.rpc('award_xp_for_ceo_helper');
 
-    if (validatedAmount <= 0) {
-      console.warn('Invalid XP amount');
+    if (error) {
+      console.error('Failed to award XP for CEO helper:', error);
       return;
     }
 
-    // Log directly (limited scope fallback)
-    await supabase.from('user_xp_log').insert({
-      user_id: user.id,
-      amount: validatedAmount,
-      reason: `${reason}_fallback`,
+    await get().fetchProfile(user.id);
+  },
+
+  addXPForCommunityMessage: async (messageId: string) => {
+    const { user } = get();
+    if (!user) return;
+
+    const { data, error } = await supabase.rpc('award_xp_for_community_message', {
+      p_message_id: messageId,
     });
 
-    const { profile } = get();
-    if (profile) {
-      const newXP = profile.xp + validatedAmount;
-      await supabase
-        .from('profiles')
-        .update({ xp: newXP })
-        .eq('id', user.id);
-
-      set({ profile: { ...profile, xp: newXP } });
+    if (error) {
+      console.error('Failed to award XP for community message:', error);
+      return;
     }
 
     await get().fetchProfile(user.id);
