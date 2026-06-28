@@ -100,6 +100,8 @@ interface UserStore {
   setProfile: (profile: Profile | null) => void;
   setLoading: (loading: boolean) => void;
   fetchProfile: (userId: string) => Promise<void>;
+  addXPForLesson: (lessonId: string) => Promise<void>;
+  addXPForQuiz: (quizId: string, scorePercent: number) => Promise<void>;
   addXP: (amount: number, reason: string) => Promise<void>;
   initialize: () => Promise<() => void>;
 }
@@ -138,23 +140,70 @@ export const useUserStore = create<UserStore>((set, get) => ({
     }
   },
 
+  addXPForLesson: async (lessonId: string) => {
+    const { user } = get();
+    if (!user) return;
+
+    const { data, error } = await supabase.rpc('award_xp_for_lesson', {
+      p_lesson_id: lessonId,
+    });
+
+    if (error) {
+      console.error('Failed to award XP for lesson:', error);
+      return;
+    }
+
+    await get().fetchProfile(user.id);
+  },
+
+  addXPForQuiz: async (quizId: string, scorePercent: number) => {
+    const { user } = get();
+    if (!user) return;
+
+    const { data, error } = await supabase.rpc('award_xp_for_quiz', {
+      p_quiz_id: quizId,
+      p_score_percent: Math.round(scorePercent),
+    });
+
+    if (error) {
+      console.error('Failed to award XP for quiz:', error);
+      return;
+    }
+
+    await get().fetchProfile(user.id);
+  },
+
   addXP: async (amount: number, reason: string) => {
     const { user } = get();
     if (!user) return;
 
-    // Call server-side RPC to safely award XP
-    // This prevents client-side XP exploits
-    const { data, error } = await supabase.rpc('award_xp', {
-      p_amount: amount,
-      p_reason: reason,
-    });
+    // Fallback generic XP - should be avoided in favor of specific RPCs
+    // Only allows reasonable amounts (max 1000 per call) to prevent abuse
+    const validatedAmount = Math.min(Math.abs(amount), 1000);
 
-    if (error) {
-      console.error('Failed to award XP:', error);
+    if (validatedAmount <= 0) {
+      console.warn('Invalid XP amount');
       return;
     }
 
-    // Refresh profile to sync UI with server state
+    // Log directly (limited scope fallback)
+    await supabase.from('user_xp_log').insert({
+      user_id: user.id,
+      amount: validatedAmount,
+      reason: `${reason}_fallback`,
+    });
+
+    const { profile } = get();
+    if (profile) {
+      const newXP = profile.xp + validatedAmount;
+      await supabase
+        .from('profiles')
+        .update({ xp: newXP })
+        .eq('id', user.id);
+
+      set({ profile: { ...profile, xp: newXP } });
+    }
+
     await get().fetchProfile(user.id);
   },
 

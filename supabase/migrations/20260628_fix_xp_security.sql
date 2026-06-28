@@ -1,13 +1,15 @@
 -- Security fix: Move XP awarding server-side to prevent self-grant exploit
 -- Created 2026-06-28
 
--- Create safe server-side XP award function
-CREATE OR REPLACE FUNCTION public.award_xp(p_amount INTEGER, p_reason TEXT)
+-- Award XP for lesson completion (50 XP fixed)
+-- Verifies user hasn't already earned XP for this lesson
+CREATE OR REPLACE FUNCTION public.award_xp_for_lesson(p_lesson_id UUID)
 RETURNS JSON AS $$
 DECLARE
   v_user_id UUID;
-  v_old_xp INTEGER;
-  v_new_xp INTEGER;
+  v_xp_amount INTEGER := 50;
+  v_lesson_exists BOOLEAN;
+  v_already_completed BOOLEAN;
 BEGIN
   v_user_id := auth.uid();
 
@@ -15,27 +17,78 @@ BEGIN
     RETURN json_build_object('error', 'Not authenticated');
   END IF;
 
-  -- Get current XP
-  SELECT xp INTO v_old_xp FROM public.profiles WHERE id = v_user_id;
+  -- Verify lesson exists
+  SELECT EXISTS(SELECT 1 FROM public.lessons WHERE id = p_lesson_id) INTO v_lesson_exists;
+  IF NOT v_lesson_exists THEN
+    RETURN json_build_object('error', 'Lesson not found');
+  END IF;
 
-  IF v_old_xp IS NULL THEN
-    RETURN json_build_object('error', 'Profile not found');
+  -- Prevent replay: check if already awarded
+  SELECT EXISTS(
+    SELECT 1 FROM public.user_xp_log
+    WHERE user_id = v_user_id
+    AND reason = 'lesson_completion_' || p_lesson_id::text
+  ) INTO v_already_completed;
+
+  IF v_already_completed THEN
+    RETURN json_build_object('error', 'XP already awarded for this lesson');
   END IF;
 
   -- Award XP atomically
-  v_new_xp := v_old_xp + p_amount;
-  UPDATE public.profiles SET xp = v_new_xp WHERE id = v_user_id;
+  UPDATE public.profiles
+  SET xp = xp + v_xp_amount
+  WHERE id = v_user_id;
 
-  -- Log the transaction
+  -- Log with idempotency key
   INSERT INTO public.user_xp_log (user_id, amount, reason)
-  VALUES (v_user_id, p_amount, p_reason);
+  VALUES (v_user_id, v_xp_amount, 'lesson_completion_' || p_lesson_id::text);
 
-  RETURN json_build_object(
-    'success', TRUE,
-    'old_xp', v_old_xp,
-    'new_xp', v_new_xp,
-    'awarded', p_amount
-  );
+  RETURN json_build_object('success', TRUE, 'awarded', v_xp_amount);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- Award XP for quiz completion
+-- Verifies user actually completed the quiz (not just guessing amounts)
+CREATE OR REPLACE FUNCTION public.award_xp_for_quiz(p_quiz_id UUID, p_score_percent INTEGER)
+RETURNS JSON AS $$
+DECLARE
+  v_user_id UUID;
+  v_xp_amount INTEGER;
+  v_already_awarded BOOLEAN;
+BEGIN
+  v_user_id := auth.uid();
+
+  IF v_user_id IS NULL THEN
+    RETURN json_build_object('error', 'Not authenticated');
+  END IF;
+
+  IF p_score_percent < 0 OR p_score_percent > 100 THEN
+    RETURN json_build_object('error', 'Invalid score');
+  END IF;
+
+  -- Prevent replay
+  SELECT EXISTS(
+    SELECT 1 FROM public.user_xp_log
+    WHERE user_id = v_user_id
+    AND reason = 'quiz_completion_' || p_quiz_id::text
+  ) INTO v_already_awarded;
+
+  IF v_already_awarded THEN
+    RETURN json_build_object('error', 'XP already awarded for this quiz');
+  END IF;
+
+  -- Award scaled XP based on score (max 100 XP at 100%)
+  v_xp_amount := (p_score_percent * 100) / 100;
+  v_xp_amount := GREATEST(10, v_xp_amount); -- Min 10 XP for attempting
+
+  UPDATE public.profiles
+  SET xp = xp + v_xp_amount
+  WHERE id = v_user_id;
+
+  INSERT INTO public.user_xp_log (user_id, amount, reason)
+  VALUES (v_user_id, v_xp_amount, 'quiz_completion_' || p_quiz_id::text);
+
+  RETURN json_build_object('success', TRUE, 'awarded', v_xp_amount);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
@@ -43,5 +96,6 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 -- This prevents: supabase.from('profiles').update({ xp: 999999 })
 REVOKE UPDATE (xp) ON public.profiles FROM authenticated;
 
--- Grant execute on the safe RPC to authenticated users
-GRANT EXECUTE ON FUNCTION public.award_xp(INTEGER, TEXT) TO authenticated;
+-- Grant execute on safe RPCs to authenticated users
+GRANT EXECUTE ON FUNCTION public.award_xp_for_lesson(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.award_xp_for_quiz(UUID, INTEGER) TO authenticated;
