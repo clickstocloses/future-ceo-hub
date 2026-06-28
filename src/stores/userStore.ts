@@ -142,28 +142,19 @@ export const useUserStore = create<UserStore>((set, get) => ({
     const { user } = get();
     if (!user) return;
 
-    // Always fetch fresh profile to avoid stale state
-    let { profile } = get();
-    if (!profile) {
-      await get().fetchProfile(user.id);
-      profile = get().profile;
-    }
-    if (!profile) return;
-
-    await supabase.from('user_xp_log').insert({
-      user_id: user.id,
-      amount,
-      reason,
+    // Call server-side RPC to safely award XP
+    // This prevents client-side XP exploits
+    const { data, error } = await supabase.rpc('award_xp', {
+      p_amount: amount,
+      p_reason: reason,
     });
 
-    const newXP = profile.xp + amount;
-    await supabase
-      .from('profiles')
-      .update({ xp: newXP })
-      .eq('id', user.id);
+    if (error) {
+      console.error('Failed to award XP:', error);
+      return;
+    }
 
-    // Update local store and refetch to ensure DB consistency
-    set({ profile: { ...profile, xp: newXP } });
+    // Refresh profile to sync UI with server state
     await get().fetchProfile(user.id);
   },
 

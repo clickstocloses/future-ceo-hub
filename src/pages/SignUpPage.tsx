@@ -113,17 +113,6 @@ export default function SignUpPage() {
               placeholder="••••••••"
             />
           </div>
-          <div>
-            <label className="text-sm font-medium text-foreground mb-1.5 block">Role</label>
-            <select
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value })}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-            >
-              <option value="student">Student</option>
-              <option value="instructor">Instructor</option>
-            </select>
-          </div>
 
           <button
             type="submit"
