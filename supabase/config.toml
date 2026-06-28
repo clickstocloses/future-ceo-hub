@@ -1,0 +1,10 @@
+project_id = "stpwmpodfvvqdurqwcok"
+
+[functions.grade-paper-submission]
+verify_jwt = false
+
+[functions.grade-open-ended]
+verify_jwt = false
+
+[functions.ceo-helper-chat]
+verify_jwt = false

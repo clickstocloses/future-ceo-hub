@@ -1,0 +1,4 @@
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS screen_reader_enabled BOOLEAN DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS screen_reader_speed FLOAT DEFAULT 1.0,
+  ADD COLUMN IF NOT EXISTS accessibility_prompt_shown BOOLEAN DEFAULT FALSE;
